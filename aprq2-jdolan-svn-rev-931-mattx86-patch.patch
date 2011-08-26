@@ -1,0 +1,1349 @@
+diff -urp a/client/cl_draw.c b/client/cl_draw.c
+--- a/client/cl_draw.c	2011-02-24 23:57:18.000000000 -0600
++++ b/client/cl_draw.c	2010-11-26 18:08:25.000000000 -0600
+@@ -23,6 +23,8 @@ Foundation, Inc., 59 Temple Place - Suit
+ //
+ 
+ void SCR_ExecuteLayoutString( char *s );
++void CL_PickupItemStretchCrosshair( void );
++void CL_AddPainPic( void );
+ void SCR_DrawInventory( void );
+ void SCR_DrawNet( void );
+ void SCR_CheckDrawCenterString( void );
+@@ -814,9 +816,14 @@ void SCR_Draw2D( void )
+ 	if(!scr_draw2d->integer)
+ 		return;
+ 
++	CL_PickupItemStretchCrosshair();
++
+ 	if (crosshair->integer)
+ 		SCR_DrawCrosshair ();
+ 
++	// draw pain pic
++	CL_AddPainPic();
++
+ 	// draw status bar
+ 	SCR_ExecuteLayoutString( cl.configstrings[CS_STATUSBAR] );
+ 
+diff -urp a/client/cl_ents.c b/client/cl_ents.c
+--- a/client/cl_ents.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/cl_ents.c	2011-02-24 22:58:56.000000000 -0600
+@@ -589,11 +589,13 @@ CL_AddPacketEntities
+ 
+ ===============
+ */
++extern cvar_t   *cl_bobbing_items;
+ void CL_AddPacketEntities (const frame_t *frame)
+ {
+ 	entity_t			ent = {0};
+ 	const entity_state_t		*s1;
+ 	float				autorotate;
++	float                           bob, bob_scale;
+ 	int					i;
+ 	int					pnum;
+ 	centity_t			*cent;
+@@ -754,6 +756,14 @@ void CL_AddPacketEntities (const frame_t
+ 
+ 		// calculate angles
+ 		if (effects & EF_ROTATE) { // some bonus items auto-rotate
++                        if (cl_bobbing_items->integer) {
++                                bob_scale = (0.005f + s1->number * 0.00001f) * 1.10;
++                                bob = 2.5 + cos( (cl.time + 1000) * bob_scale ) * 2.5;
++//                              ent.oldorigin[2] *= 0.988;      // pull it lower to the ground
++//                              ent.origin[2] *= 0.988;         // pull it lower to the ground
++                                ent.oldorigin[2] += bob;
++                                ent.origin[2] += bob;
++                        }
+ 			VectorSet(ent.angles, 0, autorotate, 0);
+ 		}
+ 		// RAFAEL
+diff -urp a/client/cl_fx.c b/client/cl_fx.c
+--- a/client/cl_fx.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/cl_fx.c	2010-11-26 18:08:25.000000000 -0600
+@@ -121,7 +121,64 @@ void CL_AddLightStyles (void)
+ 	clightstyle_t	*ls;
+ 
+ 	for (i = 0, ls = cl_lightstyle; i < MAX_LIGHTSTYLES; i++, ls++)
++	{
++		if ( Cvar_VariableValue("gl_timebasedfx") )
++		{
++			time_t			ctime;
++			struct tm		*ltime;
++			char			hour_s[5];
++			int				hour_i, am, pmarray[12], j, k;
++			float			brightness;
++
++			ctime = time(NULL);
++			ltime = localtime(&ctime);
++			strftime(hour_s, sizeof(hour_s), "%H", ltime);
++			if (hour_s[0] == '0') // trim zero off, otherwise int val. == 2
++			{
++				hour_s[0] = hour_s[1];
++				hour_s[1] = 0;
++			}
++			hour_i = atoi(hour_s);
++
++			// convert to 12-hour clock
++			if ( hour_i <= 11 )		// AM
++			{
++				am = 1;
++				if (hour_i == 0) // 0 = 12AM midnight
++					hour_i = 12;
++			}
++			else					// PM
++			{
++				am = 0;
++				if (hour_i > 12) // leave 12PM noon alone
++					hour_i -= 12;
++
++				// PM uses the 'reverse hour' of AM
++				for (j = 1, k = 11; j < 12; j++, k--)
++					pmarray[j] = k;
++			}
++
++			if ( am )
++			{
++				if (hour_i == 12) // midnight
++					brightness = 0.15f;
++				else
++					brightness = ( ( (float) hour_i / 12.0f ) * 0.75f + 0.25f );
++			}
++			else
++			{
++				if (hour_i == 12) // noon
++					brightness = 1.00f;
++				else
++					brightness = ( ( (float) pmarray[hour_i] / 12.0f ) * 0.75f + 0.25f );
++			}
++			
++			ls->value[0] = brightness;
++			ls->value[1] = brightness;
++			ls->value[2] = brightness;
++		}
+ 		V_AddLightStyle (i, ls->value);
++	}
+ }
+ 
+ /*
+diff -urp a/client/client.h b/client/client.h
+--- a/client/client.h	2011-02-24 23:57:18.000000000 -0600
++++ b/client/client.h	2011-02-23 00:01:05.000000000 -0600
+@@ -80,7 +80,7 @@ typedef struct
+ extern char cl_weaponmodels[MAX_CLIENTWEAPONMODELS][MAX_QPATH];
+ extern int num_cl_weaponmodels;
+ 
+-#define	CMD_BACKUP		64	// allow a lot of command backups for very fast systems
++#define	CMD_BACKUP		256	// allow a lot of command backups for very fast systems
+ #define CMD_MASK		(CMD_BACKUP-1)
+ 
+ #ifdef USE_CURL
+@@ -225,6 +225,9 @@ typedef struct
+ 
+ 	unsigned		settings[SVSET_MAX];
+ 
++        clientinfo_t   *playername;
++        int             playernametime;
++
+ } client_state_t;
+ 
+ extern	client_state_t	cl;
+@@ -362,6 +365,7 @@ extern	cvar_t	*cl_add_particles;
+ extern	cvar_t	*cl_add_entities;
+ extern	cvar_t	*cl_predict;
+ extern	cvar_t	*cl_footsteps;
++extern	cvar_t	*cl_smoothsteps;
+ extern	cvar_t	*cl_noskins;
+ //extern	cvar_t	*cl_autoskins;
+ 
+@@ -376,6 +380,10 @@ extern	cvar_t	*cl_run;
+ 
+ extern	cvar_t	*cl_anglespeedkey;
+ 
++extern	cvar_t	*cl_draw_playername;
++extern	cvar_t	*cl_draw_playername_x;
++extern	cvar_t	*cl_draw_playername_y;
++
+ extern	cvar_t	*cl_shownet;
+ extern	cvar_t	*cl_showmiss;
+ extern	cvar_t	*cl_showclamp;
+diff -urp a/client/cl_input.c b/client/cl_input.c
+--- a/client/cl_input.c	2011-02-24 23:57:18.000000000 -0600
++++ b/client/cl_input.c	2010-11-26 18:08:24.000000000 -0600
+@@ -676,7 +676,8 @@ void CL_SendCmd (void)
+ 
+ 	cl.sendPacketNow = false;
+ 
+-	if(cl_maxpackets->integer && !cl_async->integer) {
++	//if(cl_maxpackets->integer && !cl_async->integer) {
++	if(cl_maxpackets->integer) {
+ 		if( cl_maxpackets->integer < cl_maxfps->integer/3 )
+ 			Cvar_SetValue( "cl_maxpackets", cl_maxfps->integer/3 );
+ 		else if( cl_maxpackets->value > cl_maxfps->integer )
+diff -urp a/client/cl_main.c b/client/cl_main.c
+--- a/client/cl_main.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/cl_main.c	2011-02-24 22:59:16.000000000 -0600
+@@ -42,6 +42,7 @@ cvar_t	*rcon_address;
+ cvar_t	*cl_noskins;
+ //cvar_t	*cl_autoskins;
+ cvar_t	*cl_footsteps;
++cvar_t	*cl_smoothsteps;
+ cvar_t	*cl_timeout;
+ cvar_t	*cl_predict;
+ cvar_t	*r_maxfps;
+@@ -50,6 +51,7 @@ cvar_t	*cl_async;
+ cvar_t	*cl_gun;
+ cvar_t	*cl_gunalpha;
+ cvar_t	*cl_gun_x, *cl_gun_y, *cl_gun_z;
++cvar_t	*cl_bobbing_items;
+ 
+ cvar_t	*cl_add_particles;
+ cvar_t	*cl_add_lights;
+@@ -2154,7 +2156,9 @@ void CL_InitLocal (void)
+ 	cl_gun_x = Cvar_Get("cl_gun_x", "0", 0);
+ 	cl_gun_y = Cvar_Get("cl_gun_y", "0", 0);
+ 	cl_gun_z = Cvar_Get("cl_gun_z", "0", 0);
++	cl_bobbing_items = Cvar_Get("cl_bobbing_items", "1", CVAR_ARCHIVE);
+ 	cl_footsteps = Cvar_Get ("cl_footsteps", "1", 0);
++	cl_smoothsteps = Cvar_Get ("cl_smoothsteps", "1", CVAR_ARCHIVE);
+ 	cl_noskins = Cvar_Get ("cl_noskins", "0", 0);
+ //	cl_autoskins = Cvar_Get ("cl_autoskins", "0", 0);
+ 	cl_predict = Cvar_Get ("cl_predict", "1", 0);
+diff -urp a/client/cl_parse.c b/client/cl_parse.c
+--- a/client/cl_parse.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/cl_parse.c	2010-11-26 18:08:25.000000000 -0600
+@@ -550,8 +550,8 @@ CL_LoadClientinfo
+ */
+ void CL_LoadClientinfo (clientinfo_t *ci, char *s)
+ {
+-	int			i = 0;
+-	char		*t;
++	int			i = 0, j;
++	char		*t, *t2, *t3; // New variables: t2, t3
+ 	char		model_name[MAX_QPATH];
+ 	char		skin_name[MAX_QPATH];
+ 	char		model_filename[MAX_QPATH];
+@@ -581,91 +581,90 @@ void CL_LoadClientinfo (clientinfo_t *ci
+ 		t++;
+ 	}
+ 
+-	if (cl_noskins->integer || *s == 0 || i == -1)
++	// BEGIN: SKIN CODE CLEANUP
++
++	// replace backslashes with a forward slash
++	for (j=0,t=s ; j < strlen(s) ; j++,t++)
++		if (*t == '\\')
++			*t = '/';
++
++	t = strrchr(s, '/');
++	t2 = strchr(s, '/');
++	t3 = NULL;
++	if (t2!=NULL)
++		t3 = strchr(t2+1, '/');
++
++	// a few sanity checks; default to male/grunt if something is amiss
++	if (cl_noskins->integer || *s == 0 || i == -1 || strchr(s,'.')!=NULL || strchr(s,'/')==NULL || (t!=NULL && strlen(t)==1) || t3 != NULL )
++		s = "male/grunt\0";
++
++	// isolate the model name
++	Q_strncpyz (model_name, s, sizeof(model_name));
++	t = strchr(model_name, '/');
++	*t = 0;
++
++	// isolate the skin name
++	Q_strncpyz(skin_name, s + strlen(model_name) + 1, sizeof(skin_name));
++
++	// model file
++	Com_sprintf (model_filename, sizeof(model_filename), "players/%s/tris.md2", model_name);
++	ci->model = R_RegisterModel (model_filename);
++
++	// if we don't have the model
++	if (!ci->model)
+ 	{
+-		strcpy (model_filename, "players/male/tris.md2");
+-		strcpy (weapon_filename, "players/male/weapon.md2");
+-		strcpy (skin_filename, "players/male/grunt.pcx");
+-		strcpy (ci->iconname, "/players/male/grunt_i.pcx");
++		Q_strncpyz(model_name, "male", sizeof(model_name));
++		Com_sprintf (model_filename, sizeof(model_filename), "players/%s/tris.md2", model_name);
+ 		ci->model = R_RegisterModel (model_filename);
+-		memset(ci->weaponmodel, 0, sizeof(ci->weaponmodel));
+-		ci->weaponmodel[0] = R_RegisterModel (weapon_filename);
+-		ci->skin = R_RegisterSkin (skin_filename);
+-		ci->icon = Draw_FindPic (ci->iconname);
+ 	}
+-	else
+-	{
+-		// isolate the model name
+-		Q_strncpyz (model_name, s, sizeof(model_name));
+-		t = strchr(model_name, '/');
+-		if (!t)
+-			t = strchr(model_name, '\\');
+-		
+-		if (!t) {
+-			memcpy (model_name, "male\0grunt\0\0\0\0\0\0", 16);
+-			s = "male\\grunt\0";
+-		}
+-		else {
+-			*t = 0;
+-		}
+ 
+-		// isolate the skin name
+-		Q_strncpyz(skin_name, s + strlen(model_name) + 1, sizeof(skin_name));
++	// skin file
++	Com_sprintf (skin_filename, sizeof(skin_filename), "players/%s/%s.pcx", model_name, skin_name);
++	ci->skin = R_RegisterSkin (skin_filename);
+ 
+-		// model file
+-		Com_sprintf (model_filename, sizeof(model_filename), "players/%s/tris.md2", model_name);
+-		ci->model = R_RegisterModel (model_filename);
+-		if (!ci->model)
++	// if we don't have the skin
++	if (!ci->skin)
++	{
++		// pick a default skin for the basic models
++		if (!Q_stricmp(model_name, "male"))
++			Q_strncpyz(skin_name, "grunt", sizeof(skin_name));
++		else if (!Q_stricmp(model_name, "female"))
++			Q_strncpyz(skin_name, "athena", sizeof(skin_name));
++		else if (!Q_stricmp(model_name, "cyborg"))
++			Q_strncpyz(skin_name, "oni911", sizeof(skin_name));
++		else
+ 		{
+-			strcpy(model_name, "male");
+-			strcpy(model_filename, "players/male/tris.md2");
+-			ci->model = R_RegisterModel (model_filename);
++			// if not one of the basic models, default to male/grunt
++			Q_strncpyz(model_name, "male", sizeof(model_name));
++	                Com_sprintf (model_filename, sizeof(model_filename), "players/%s/tris.md2", model_name);
++        	        ci->model = R_RegisterModel (model_filename);
++
++	                Q_strncpyz(skin_name, "grunt", sizeof(skin_name));
+ 		}
+ 
+-		// skin file
+ 		Com_sprintf (skin_filename, sizeof(skin_filename), "players/%s/%s.pcx", model_name, skin_name);
+ 		ci->skin = R_RegisterSkin (skin_filename);
++	}
+ 
+-		// if we don't have the skin and the model wasn't male,
+-		// see if the male has it (this is for CTF's skins)
+- 		if (!ci->skin && Q_stricmp(model_name, "male"))
+-		{
+-			// change model to male
+-			strcpy(model_name, "male");
+-			strcpy(model_filename, "players/male/tris.md2");
+-			ci->model = R_RegisterModel (model_filename);
+-
+-			// see if the skin exists for the male model
+-			Com_sprintf (skin_filename, sizeof(skin_filename), "players/%s/%s.pcx", model_name, skin_name);
+-			ci->skin = R_RegisterSkin (skin_filename);
+-		}
+-
+-		// if we still don't have a skin, it means that the male model didn't have
+-		// it, so default to grunt
+-		if (!ci->skin) {
+-			// see if the skin exists for the male model
+-			Com_sprintf (skin_filename, sizeof(skin_filename), "players/%s/grunt.pcx", model_name);
+-			ci->skin = R_RegisterSkin (skin_filename);
+-		}
++	// END: SKIN CODE CLEANUP
+ 
+-		// weapon file
+-		for (i = 0; i < num_cl_weaponmodels; i++) {
+-			Com_sprintf (weapon_filename, sizeof(weapon_filename), "players/%s/%s", model_name, cl_weaponmodels[i]);
++	// weapon file
++	for (i = 0; i < num_cl_weaponmodels; i++) {
++		Com_sprintf (weapon_filename, sizeof(weapon_filename), "players/%s/%s", model_name, cl_weaponmodels[i]);
++		ci->weaponmodel[i] = R_RegisterModel(weapon_filename);
++		if (!ci->weaponmodel[i] && strcmp(model_name, "cyborg") == 0) {
++			// try male
++			Com_sprintf (weapon_filename, sizeof(weapon_filename), "players/male/%s", cl_weaponmodels[i]);
+ 			ci->weaponmodel[i] = R_RegisterModel(weapon_filename);
+-			if (!ci->weaponmodel[i] && strcmp(model_name, "cyborg") == 0) {
+-				// try male
+-				Com_sprintf (weapon_filename, sizeof(weapon_filename), "players/male/%s", cl_weaponmodels[i]);
+-				ci->weaponmodel[i] = R_RegisterModel(weapon_filename);
+-			}
+-			if (!cl_vwep->integer)
+-				break; // only one when vwep is off
+ 		}
+-
+-		// icon file
+-		Com_sprintf (ci->iconname, sizeof(ci->iconname), "/players/%s/%s_i.pcx", model_name, skin_name);
+-		ci->icon = Draw_FindPic (ci->iconname);
++		if (!cl_vwep->integer)
++			break; // only one when vwep is off
+ 	}
+ 
++	// icon file
++	Com_sprintf (ci->iconname, sizeof(ci->iconname), "/players/%s/%s_i.pcx", model_name, skin_name);
++	ci->icon = Draw_FindPic (ci->iconname);
++
+ 	// must have loaded all data types to be valud
+ 	if (!ci->skin || !ci->icon || !ci->model || !ci->weaponmodel[0])
+ 	{
+diff -urp a/client/cl_pred.c b/client/cl_pred.c
+--- a/client/cl_pred.c	2011-02-24 23:57:18.000000000 -0600
++++ b/client/cl_pred.c	2011-02-23 01:30:02.000000000 -0600
+@@ -197,9 +197,11 @@ CL_PredictMovement
+ Sets cl.predicted_origin and cl.predicted_angles
+ =================
+ */
++extern cvar_t *cl_async;
+ void CL_PredictMovement (void)
+ {
+ 	int			ack, current, frame, step;
++	usercmd_t	*cmd;
+ 	pmove_t		pm;
+ 
+ 	if (cls.state != ca_active || cl_paused->integer)
+@@ -236,15 +238,36 @@ void CL_PredictMovement (void)
+ 	VectorClear(pm.mins);
+ 	VectorClear(pm.maxs);
+ 
+-	// run frames
+-	while (++ack < current) {
+-		frame = ack & CMD_MASK;
+-
+-		pm.cmd = cl.cmds[frame];
+-		Pmove(&pm, &cl.pmp);
+-
+-		// save for debug checking
+-		VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
++	if (cl_async->value)
++	{
++		// run frames
++		while (++ack < current)
++		{
++			frame = ack & CMD_MASK;
++			cmd = &cl.cmds[frame];
++
++			if (!cmd->msec)
++				continue; //jec - ignore 'null' usercmd entries.
++
++			pm.cmd = *cmd;
++			Pmove(&pm, &cl.pmp);
++
++			// save for debug checking
++			VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
++		}
++	}
++	else
++	{
++		// run frames
++		while (++ack < current) {
++			frame = ack & CMD_MASK;
++
++			pm.cmd = cl.cmds[frame];
++			Pmove(&pm, &cl.pmp);
++
++			// save for debug checking
++			VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
++		}
+ 	}
+ 
+ 	// run pending cmd
+@@ -263,13 +286,29 @@ void CL_PredictMovement (void)
+ 		frame = current - 1;
+ 	}
+ 
+-	step = pm.s.origin[2] - cl.predicted_origins[(frame-1) & CMD_MASK][2];
+-	if (cl.predicted_step_frame != frame && 
+-		step > 63 && step < 160 && (pm.s.pm_flags & PMF_ON_GROUND) )
++	if (cl_smoothsteps->value)
++	{
++		//get immediate results of this prediction vs last one
++		step = pm.s.origin[2] - (int)(cl.predicted_origin[2] * 8);
++
++		//r1ch: treat only some units as steps
++		if (((step > 62 && step < 66) || (step > 94 && step < 98) || (step > 126 && step < 130)) && !VectorCompare (pm.s.velocity, vec3_origin) && (pm.s.pm_flags & PMF_ON_GROUND))
++		{
++			cl.predicted_step = step * 0.125f;
++			cl.predicted_step_time = cls.realtime - (unsigned int)(cls.frametime * 500);
++			cl.predicted_step_frame = frame;
++		}
++	}
++	else
+ 	{
+-		cl.predicted_step = step * 0.125f;
+-		cl.predicted_step_time = cls.realtime - (unsigned int)(cls.frametime * 500);
+-		cl.predicted_step_frame = frame;
++		step = pm.s.origin[2] - cl.predicted_origins[(frame-1) & CMD_MASK][2];
++		if (cl.predicted_step_frame != frame && 
++			step > 63 && step < 160 && (pm.s.pm_flags & PMF_ON_GROUND) )
++		{
++			cl.predicted_step = step * 0.125f;
++			cl.predicted_step_time = cls.realtime - (unsigned int)(cls.frametime * 500);
++			cl.predicted_step_frame = frame;
++		}
+ 	}
+ 
+ 	// copy results out for rendering
+diff -urp a/client/cl_scrn.c b/client/cl_scrn.c
+--- a/client/cl_scrn.c	2011-02-24 23:57:18.000000000 -0600
++++ b/client/cl_scrn.c	2010-11-26 18:08:25.000000000 -0600
+@@ -33,6 +33,8 @@ Foundation, Inc., 59 Temple Place - Suit
+   */
+ 
+ #include "client.h"
++#include <sys/time.h>
++#include <unistd.h>
+ 
+ 
+ float		scr_con_current;	// aproaches scr_conlines at scr_conspeed
+@@ -66,7 +68,6 @@ typedef struct
+ {
+ 	int		x1, y1, x2, y2;
+ } dirty_t;
+-
+ dirty_t		scr_dirty, scr_old_dirty[2];
+ 
+ char		crosshair_pic[8];
+@@ -115,6 +116,189 @@ void CL_AddNetgraph (void)
+ }
+ 
+ 
++
++/* From wje_lq's post here:
++   http://www.linuxquestions.org/questions/programming-9/how-to-calculate-time-difference-in-milliseconds-in-c-c-711096/#post3475339
++*/
++long long
++timeval_diff(struct timeval *difference,
++             struct timeval *end_time,
++             struct timeval *start_time
++            )
++{
++  struct timeval temp_diff;
++
++  if(difference==NULL)
++  {
++    difference=&temp_diff;
++  }
++
++  difference->tv_sec =end_time->tv_sec -start_time->tv_sec ;
++  difference->tv_usec=end_time->tv_usec-start_time->tv_usec;
++
++  /* Using while instead of if below makes the code slightly more robust. */
++
++  while(difference->tv_usec<0)
++  {
++    difference->tv_usec+=1000000;
++    difference->tv_sec -=1;
++  }
++
++  return 1000000LL*difference->tv_sec+
++                   difference->tv_usec;
++
++} /* timeval_diff() */
++
++static int	init_stretchpickup = 0;
++int		*pickup_item;
++int		last_pickup_item;
++struct timeval	pickupitem_time;
++float		crosshair_scale = 1;
++static int	stretch_crosshair = 0;
++void CL_PickupItemStretchCrosshair(void)
++{
++	struct timeval	ctime;
++	long long	time_difference;
++
++	if (!init_stretchpickup)
++	{
++		gettimeofday(&pickupitem_time, NULL);
++		crosshair_scale = Cvar_VariableValue("ch_scale");
++		pickup_item = (int*)&cl.frame.playerstate.stats[STAT_PICKUP_ICON];
++		last_pickup_item = 0;
++		init_stretchpickup = 1;
++	}
++
++	gettimeofday(&ctime, NULL);
++	time_difference = timeval_diff(NULL, &ctime, &pickupitem_time);
++
++	//Com_Printf("time diff = %lld ms\n", time_difference/1000LL);
++
++	// If we have picked up an item
++	if (*pickup_item)
++	{
++		if ( !stretch_crosshair )
++		{
++			if (last_pickup_item != *pickup_item)
++			{
++				Cvar_SetValue("ch_scale", crosshair_scale*2);
++				pickupitem_time = ctime;
++				last_pickup_item = *pickup_item;
++				stretch_crosshair = 1;
++			}
++		}
++		else
++		{
++			if ( (time_difference/1000LL) >= 250LL )
++			{
++				Cvar_SetValue("ch_scale", crosshair_scale);
++				stretch_crosshair = 0;
++				*pickup_item = 0;
++			}
++		}
++	}
++}
++
++typedef struct
++{
++	int		ch;	// current health
++	int		lh;	// last health
++	int		hlost;	// have we lost health?
++
++	int		ca;	// current armor
++	int		la;	// last armor
++	int		alost;	// have we lost armor?
++
++	time_t		ct;	// current time
++	time_t		lt;	// last time
++} paininfo_t;
++static paininfo_t paininfo;
++static int paininfo_init = 0;
++void CL_AddPainPic2(void)
++{
++	double		time_difference;
++
++	// get current time and stats
++	paininfo.ct = time(NULL);
++	paininfo.ch = cl.frame.playerstate.stats[STAT_HEALTH];
++	paininfo.ca = cl.frame.playerstate.stats[STAT_ARMOR];
++
++	// initialize the paininfo struct
++	if (!paininfo_init)
++	{
++		paininfo.lh = paininfo.ch;
++		paininfo.la = paininfo.ca;
++		paininfo.lt = paininfo.ct;
++
++		paininfo_init = 1;
++	}
++
++	time_difference = difftime(paininfo.ct, paininfo.lt);
++
++	// Did we lose health?
++	if (
++	     (
++	      // Health <= 100 and lost health, OR
++	      (paininfo.lh <= 100 && paininfo.lh > paininfo.ch) ||
++	      // Health > 100, lost health, and health lost is > 1 (to counteract megahealth from registering)
++	      (paininfo.lh > 100 && paininfo.lh > paininfo.ch && (paininfo.lh - paininfo.ch) > 1)
++	     )
++	     // and hlost flag not yet toggled
++	     && !paininfo.hlost
++	) {
++		paininfo.hlost = 1;
++	}
++
++	// Did we lose armor?
++	if (
++	    // Armor is less than before
++	    paininfo.la > paininfo.ca
++	    // Must have lost some health (hack, to counteract armor/shield 'toggle value')
++	    && paininfo.hlost
++	    // and alost flag not yet toggled
++	    && !paininfo.alost
++	) {
++		paininfo.alost = 1;
++	}
++
++	if (time_difference >= 1)
++	{
++		paininfo.hlost = 0;
++		paininfo.alost = 0;
++
++		paininfo.lh = paininfo.ch;
++		paininfo.la = paininfo.ca;
++		paininfo.lt = paininfo.ct;
++	}
++
++	if (paininfo.hlost)
++		Draw_Pic (0, 0, "pain_health", 1);
++
++	if (paininfo.alost)
++		Draw_Pic (0, 0, "pain_armor", 1);
++}
++
++extern cvar_t *info_spectator;
++void CL_AddPainPic(void)
++{
++	if (info_spectator->value)
++	{
++		CL_AddPainPic2();
++		return;
++	}
++
++	if (cl.frame.playerstate.stats[STAT_FLASHES] & 1)
++	{
++		Draw_Pic (0, 0, "pain_health", 1);
++	}
++
++	if (cl.frame.playerstate.stats[STAT_FLASHES] & 2)
++	{
++		Draw_Pic (0, 0, "pain_armor", 1);
++	}
++}
++
++
+ typedef struct
+ {
+ 	float	value;
+@@ -122,7 +306,7 @@ typedef struct
+ } graphsamp_t;
+ 
+ static	int			current = 0;
+-static	graphsamp_t	values[1024];
++static	graphsamp_t	values[2048];
+ 
+ /*
+ ==============
+@@ -131,8 +315,8 @@ SCR_DebugGraph
+ */
+ void SCR_DebugGraph (float value, int color)
+ {
+-	values[current&1023].value = value;
+-	values[current&1023].color = color;
++	values[current&2047].value = value;
++	values[current&2047].color = color;
+ 	current++;
+ }
+ 
+@@ -156,17 +340,20 @@ static void SCR_DrawDebugGraph (void)
+ 	y = scr_vrect.y+scr_vrect.height;
+ 
+ 	//Draw_Fill (x, y-scr_graphheight->value, w, scr_graphheight->value, 8);
+-
++	
+ 	for (a=0 ; a<w ; a++)
+ 	{
+-		i = (current-1-a+1024) & 1023;
++		// values needs to be able to go 0->w
++		i = (current-1-a+2048) & 2047;
+ 		v = values[i].value;
+ 		color = values[i].color;
+ 		v = v*scr_graphscale->value + scr_graphshift->value;
+-		
++
+ 		if (v < 0)
+ 			v += scr_graphheight->value * (1+(int)(-v/scr_graphheight->value));
++
+ 		h = (int)v % scr_graphheight->integer;
++
+ 		Draw_Fill (x+w-1-a, y - h, 1,	h, color);
+ 	}
+ }
+@@ -507,6 +694,10 @@ void SCR_Init (void)
+ 	Cmd_AddCommand ("sky",SCR_Sky_f);
+ 	Cmd_AddCommand ("centerprint", CL_EchoCenterPrint_f);
+ 
++	// preload pain pics
++	Draw_FindPic ("pain_health");
++	Draw_FindPic ("pain_armor");
++
+ 	scr_initialized = true;
+ }
+ 
+diff -urp a/client/cl_view.c b/client/cl_view.c
+--- a/client/cl_view.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/cl_view.c	2011-02-24 22:57:27.000000000 -0600
+@@ -43,6 +43,137 @@ static lightstyle_t	r_lightstyles[MAX_LI
+ char cl_weaponmodels[MAX_CLIENTWEAPONMODELS][MAX_QPATH];
+ int num_cl_weaponmodels;
+ 
++cvar_t	*cl_draw_playername;
++cvar_t	*cl_draw_playername_x;
++cvar_t	*cl_draw_playername_y;
++
++/*
++ * ================= SCR_AdjustFrom640 =================
++ */
++void
++SCR_AdjustFrom640(float *x, float *y, float *w, float *h, qboolean refdef)
++{
++        float           xscale, yscale, xofs, yofs;
++
++        if (refdef) {
++                xscale = cl.refdef.width / 640.0;
++                yscale = cl.refdef.height / 480.0;
++                xofs = cl.refdef.x;
++                yofs = cl.refdef.y;
++        } else {
++                xscale = viddef.width / 640.0;
++                yscale = viddef.height / 480.0;
++                xofs = 0;
++                yofs = 0;
++        }
++
++        if (x) {
++                *x *= xscale;
++                *x += xofs;
++        }
++        if (y) {
++                *y *= yscale;
++                *y += yofs;
++        }
++        if (w) {
++                *w *= xscale;
++        }
++        if (h) {
++                *h *= yscale;
++        }
++}
++
++/*
++ * ================= SCR_ScanForEntityNames from Q2Pro =================
++ */
++void
++SCR_ScanForEntityNames(void)
++{
++        trace_t         trace, worldtrace;
++        vec3_t          end;
++        entity_state_t *ent;
++        int             i, x, zd, zu;
++        int             headnode;
++        int             num;
++        vec3_t          bmins, bmaxs;
++        vec3_t          forward;
++
++        AngleVectors(cl.refdef.viewangles, forward, NULL, NULL);
++        VectorMA(cl.refdef.vieworg, 131072, forward, end);
++
++        worldtrace = CM_BoxTrace(cl.refdef.vieworg, end, vec3_origin, vec3_origin, 0, MASK_SOLID);
++
++        for (i = 0; i < cl.frame.num_entities; i++) {
++                num = (cl.frame.parse_entities + i) & (MAX_PARSE_ENTITIES - 1);
++                ent = &cl_parse_entities[num];
++
++                if (ent->number == cl.playernum + 1) {
++                        continue;
++                }
++                if (ent->modelindex != 255) {
++                        continue;       /* not a player */
++                }
++                if (ent->frame >= 173 || ent->frame <= 0) {
++                        continue;       /* player is dead */
++                }
++                if (!ent->solid || ent->solid == 31) {
++                        continue;       /* not solid or bmodel */
++                }
++                x = 8 * (ent->solid & 31);
++                zd = 8 * ((ent->solid >> 5) & 31);
++                zu = 8 * ((ent->solid >> 10) & 63) - 32;
++
++                bmins[0] = bmins[1] = -x;
++                bmaxs[0] = bmaxs[1] = x;
++                bmins[2] = -zd;
++                bmaxs[2] = zu;
++
++                headnode = CM_HeadnodeForBox(bmins, bmaxs);
++
++                trace = CM_TransformedBoxTrace(cl.refdef.vieworg, end,
++                    vec3_origin, vec3_origin, headnode, MASK_PLAYERSOLID,
++                    ent->origin, vec3_origin);
++
++                if (trace.allsolid || trace.startsolid || trace.fraction < worldtrace.fraction) {
++                        cl.playername = &cl.clientinfo[ent->skinnum & 0xFF];
++                        cl.playernametime = cls.realtime;
++                        break;
++                }
++        }
++}
++
++/*
++ * ================= SCR_DrawPlayerNames =================
++ */
++
++void
++SCR_DrawPlayerNames(void)
++{
++        float           x, y;
++
++        if (!cl_draw_playername->value) {
++                return;
++        }
++
++        SCR_ScanForEntityNames();
++
++        if (cls.realtime - cl.playernametime > 100 * cl_draw_playername->value) {
++                return;
++        }
++
++        if (!cl.playername) {
++                return;
++        }
++
++        x = cl_draw_playername_x->value;
++        y = cl_draw_playername_y->value;
++
++        SCR_AdjustFrom640(&x, &y, NULL, NULL, true);
++
++        DrawString(x, y, cl.playername->name);
++
++}
++
+ /*
+ ====================
+ V_ClearScene
+@@ -448,7 +579,7 @@ void V_RenderView( float stereo_separati
+ 		// sort entities for better cache locality
+         qsort( cl.refdef.entities, cl.refdef.num_entities, sizeof( cl.refdef.entities[0] ), (int (*)(const void *, const void *))entitycmpfnc );
+ 	}
+-
++	
+ 	R_RenderFrame (&cl.refdef);
+ 	if (cl_stats->integer)
+ 		Com_Printf ("ent:%i  lt:%i  part:%i\n", r_numentities, r_numdlights, r_numparticles);
+@@ -456,6 +587,8 @@ void V_RenderView( float stereo_separati
+ 	SCR_AddDirtyPoint (scr_vrect.x, scr_vrect.y);
+ 	SCR_AddDirtyPoint (scr_vrect.x+scr_vrect.width-1,
+ 		scr_vrect.y+scr_vrect.height-1);
++
++	SCR_DrawPlayerNames();
+ }
+ 
+ 
+@@ -487,4 +620,8 @@ void V_Init (void)
+ 
+ 	cl_wsfov = Cvar_Get("cl_wsfov", "1", 0);
+ 	cl_stats = Cvar_Get ("cl_stats", "0", 0);
++
++	cl_draw_playername = Cvar_Get("cl_draw_playername", "1", CVAR_ARCHIVE);
++	cl_draw_playername_x = Cvar_Get("cl_draw_playername_x", "308", 0);
++	cl_draw_playername_y = Cvar_Get("cl_draw_playername_y", "300", 0);
+ }
+diff -urp a/client/console.c b/client/console.c
+--- a/client/console.c	2011-02-24 23:57:18.000000000 -0600
++++ b/client/console.c	2010-11-26 18:08:25.000000000 -0600
+@@ -35,7 +35,7 @@ typedef struct
+ 
+ #define	CON_TIMES		8
+ #define CON_TIMES_MASK	(CON_TIMES - 1)
+-#define	CON_TEXTSIZE	65536
++#define	CON_TEXTSIZE	1048576
+ 
+ typedef struct console_s
+ {
+diff -urp a/client/console.h b/client/console.h
+--- a/client/console.h	2011-02-24 23:57:18.000000000 -0600
++++ b/client/console.h	2010-11-26 18:08:24.000000000 -0600
+@@ -26,7 +26,7 @@ Foundation, Inc., 59 Temple Place - Suit
+ #define	MAX_CON_TIMES 8
+ 
+ //#define		CON_TEXTSIZE	32768
+-#define	CON_TEXTSIZE	65536
++#define	CON_TEXTSIZE	1048576
+ 
+ typedef struct
+ {
+diff -urp a/client/snd_dma.c b/client/snd_dma.c
+--- a/client/snd_dma.c	2011-02-24 23:57:19.000000000 -0600
++++ b/client/snd_dma.c	2010-11-26 18:08:25.000000000 -0600
+@@ -698,9 +698,9 @@ void S_IssuePlaysound (playsound_t *ps)
+ 
+ static struct sfx_s *S_RegisterSexedSound (int entnum, const char *base)
+ {
+-	int				n;
+-	char			*p;
+-	struct sfx_s	*sfx;
++	int			n, i;
++	char			*t, *t2, *t3;
++	struct sfx_s		*sfx;
+ 	char			model[MAX_QPATH];
+ 	char			sexedFilename[MAX_QPATH];
+ 	char			maleFilename[MAX_QPATH];
+@@ -710,17 +710,33 @@ static struct sfx_s *S_RegisterSexedSoun
+ 	n = CS_PLAYERSKINS + entnum - 1;
+ 	if (cl.configstrings[n][0])
+ 	{
+-		p = strchr(cl.configstrings[n], '\\');
+-		if (p) {
+-			Q_strncpyz(model, p + 1, sizeof(model));
+-			p = strchr(model, '/');
+-			if (p)
+-				*p = 0;
++		t = strchr(cl.configstrings[n], '\\');
++		if (t) {
++			Q_strncpyz(model, t + 1, sizeof(model));
++
++			// replace backslashes with a forward slash
++			for (i=0,t=model; i < strlen(model) ; i++,t++)
++				if (*t == '\\')
++					*t = '/';
++
++			t = strrchr(model, '/');
++			t2 = strchr(model, '/');
++			t3 = NULL;
++			if (t2!=NULL)
++				t3 = strchr(t2+1, '/');
++
++			// a few sanity checks; default to male/grunt if something is amiss
++			if (cl_noskins->integer || model[0] == 0 || strchr(model,'.')!=NULL || strchr(model,'/')==NULL || (t!=NULL && strlen(t)==1) || t3 != NULL )
++				Q_strncpyz(model, "male/grunt\0", sizeof(model));
++
++			t = strchr(model, '/');
++			if (t)
++				*t = 0;
+ 		}
+ 	}
+ 	// if we can't figure it out, they're male
+-	if (!model[0])
+-		strcpy(model, "male");
++	//if (!model[0])
++	//	strcpy(model, "male");
+ 
+ 	// see if we already know of the model specific sound
+ 	Com_sprintf (sexedFilename, sizeof(sexedFilename), "#players/%s/%s", model, base+1);
+diff -urp a/linux/rw_linux.c b/linux/rw_linux.c
+--- a/linux/rw_linux.c	2011-02-24 23:56:53.000000000 -0600
++++ b/linux/rw_linux.c	2010-11-30 07:00:01.000000000 -0600
+@@ -142,7 +142,7 @@ void IN_Move (usercmd_t *cmd)
+ 		my = (my + old_mouse_y) * 0.5f;
+ 	}
+ 
+-	old_mouse_x = mx;
++/*	old_mouse_x = mx;
+ 	old_mouse_y = my;
+ 
+ 	if (m_accel->value) {
+@@ -154,6 +154,31 @@ void IN_Move (usercmd_t *cmd)
+ 		mx *= sensitivity->value;
+ 		my *= sensitivity->value;
+ 	}
++*/
++
++	if (m_accel->value > 0.0f || m_accel->value < 0.0f) {
++		float speed_x = sensitivity->value + (float)sqrt(fabs(mx*old_mouse_x)) * m_accel->value;
++		float speed_y = sensitivity->value + (float)sqrt(fabs(my*old_mouse_y)) * m_accel->value;
++
++		old_mouse_x = mx;
++		old_mouse_y = my;
++
++		// something has to be multiplied into the mx and my variables
++		// I have the current value, the old value, and the difference
++		// the difference needs to scale
++		//   m_accel is the percentage of the difference
++		//   then added to mx, and finally multiplied by sensitivity.
++		//mx = (mx + (mx_diff * m_accel->value)) * sensitivity->value;
++		//my = (my + (my_diff * m_accel->value)) * sensitivity->value;
++		mx *= speed_x;
++		my *= speed_y;
++	} else {
++		old_mouse_x = mx;
++		old_mouse_y = my;
++
++		mx *= sensitivity->value;
++		my *= sensitivity->value;
++	}
+ 
+ 	if (m_autosens->integer)
+ 	{
+diff -urp a/Makefile b/Makefile
+--- a/Makefile	2011-02-24 23:57:19.000000000 -0600
++++ b/Makefile	2011-01-24 20:46:17.000000000 -0600
+@@ -8,7 +8,7 @@
+ 
+ # Here are your build options:
+ # (Note: not all options are available for all platforms).
+-BUILD_GLX=NO		# X11 GLX client
++BUILD_GLX=YES		# X11 GLX client
+ BUILD_X11=NO		# X11 software client
+ BUILD_GAME=YES		# Build game library
+ BUILD_EVDEV=NO		# Build evdev mouse input support
+diff -urp a/ref_gl/gl_rmain.c b/ref_gl/gl_rmain.c
+--- a/ref_gl/gl_rmain.c	2011-02-24 23:56:51.000000000 -0600
++++ b/ref_gl/gl_rmain.c	2011-02-20 23:28:12.000000000 -0600
+@@ -161,8 +161,13 @@ cvar_t	*gl_celshading;				//celshading
+ cvar_t	*gl_celshading_width;
+ cvar_t	*gl_scale;
+ cvar_t	*gl_watercaustics;
++
+ cvar_t	*gl_fog;
+-cvar_t	*gl_fog_density;
++//cvar_t	*gl_fog_density;
++int	fogType = 3;
++float	fogDensity = 0.0f;
++cvar_t	*gl_timebasedfx;
++
+ cvar_t	*gl_coloredlightmaps;
+ cvar_t	*r_customwidth;
+ cvar_t	*r_customheight;
+@@ -273,7 +278,7 @@ void R_TranslateForEntity (const vec3_t
+ 	r_ModelViewMatrix[12] = wM[0] * origin[0] + wM[4] * origin[1] + wM[8 ] * origin[2] + wM[12];
+ 	r_ModelViewMatrix[13] = wM[1] * origin[0] + wM[5] * origin[1] + wM[9 ] * origin[2] + wM[13];
+ 	r_ModelViewMatrix[14] = wM[2] * origin[0] + wM[6] * origin[1] + wM[10] * origin[2] + wM[14];
+-
++	
+ 	qglLoadMatrixf(r_ModelViewMatrix);
+ 	isModelMatrix = true;
+ }
+@@ -655,6 +660,9 @@ R_DrawParticles
+ */
+ static void R_DrawParticles (void)
+ {
++	if (fogDensity > 0.0f)
++		qglDisable(GL_FOG);
++
+ 	if ( gl_ext_pointparameters->integer && qglPointParameterfEXT )
+ 	{
+ 		int i;
+@@ -687,6 +695,9 @@ static void R_DrawParticles (void)
+ 	{
+ 		GL_DrawParticles();
+ 	}
++
++	if (fogDensity > 0.0f)
++		qglEnable(GL_FOG);
+ }
+ 
+ /*
+@@ -795,7 +806,7 @@ static void R_SetupFrame (void)
+ 			temp[2] -= 16; // look down a bit
+ 		else
+ 			temp[2] += 16;
+-
++		
+ 		leaf = Mod_PointInLeaf (temp, r_worldmodel);
+ 		if ( !(leaf->contents & CONTENTS_SOLID) && (leaf->cluster != r_viewcluster2) )
+ 			r_viewcluster2 = leaf->cluster;
+@@ -988,6 +999,101 @@ static void R_Clear (void)
+ 
+ /*
+ ================
++R_SetupFog
++
++dude: engine_fog
++================
++*/
++void R_SetupFog(void)
++{
++	// dude: timebasedfx - begin
++	time_t			ctime;
++	struct tm		*ltime;
++	char			hour_s[3];
++	int			hour_i, am;
++	float			ampmarray[2][13] =
++	{
++		// X, hours 1 - 12 (fog from 10:00PM - 6:59AM)
++		{ 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00020, 0.00040, 0.00000 },	// PM - fog comes in heavily when it turns night
++		{ 0.00000, 0.00050, 0.00040, 0.00030, 0.00020, 0.00010, 0.00005, 0.00000, 0.00000, 0.00000, 0.00000, 0.00000, 0.00060 }		// AM - fog slowly, smoothly, clears up..hopefully this will be a good transition
++	};
++	// dude: timebasedfx - end
++
++	int				pointContents;
++	float			fogColor[4][4] =
++	{
++		{ 0.00, 0.53, 1.00, 1.00 },	// water	(0)
++		{ 0.65, 1.00, 0.00, 1.00 },	// slime	(1)
++		{ 1.00, 0.25, 0.00, 1.00 },	// lava		(2)
++		{ 0.45, 0.50, 0.50, 1.00 }	// norm fog	(3)
++	};
++
++	qglDisable(GL_FOG);
++
++	pointContents = CM_PointContents(r_newrefdef.vieworg, 0);
++	if (pointContents & CONTENTS_WATER)		fogType = 0;
++	else if (pointContents & CONTENTS_SLIME)	fogType = 1;
++	else if (pointContents & CONTENTS_LAVA)		fogType = 2;
++	else						fogType = 3;
++
++	if (gl_fog->value || fogType == 0 || fogType == 1 || fogType == 2)
++	{
++		if (gl_timebasedfx->value && (fogType == 0 || fogType == 3))
++		{
++			ctime = time(NULL);
++			ltime = localtime(&ctime);
++			strftime(hour_s, sizeof(hour_s), "%H", ltime);
++			if (hour_s[0] == '0') // trim zero off, otherwise int val. == 2
++			{
++				hour_s[0] = hour_s[1];
++				hour_s[1] = 0;
++			}
++			hour_i = atoi(hour_s);
++
++			// convert to 12-hour clock
++			if ( hour_i <= 11 )		// AM
++			{
++				am = 1;
++				if (hour_i == 0) // 0 = 12AM midnight
++					hour_i = 12;
++			}
++			else					// PM
++			{
++				am = 0;
++				if (hour_i > 12) // leave 12PM noon alone
++					hour_i -= 12;
++			}
++			fogDensity = ampmarray[am][hour_i];
++		}
++		else
++		{
++			if (fogType == 1 || fogType == 2)
++				fogDensity = 0.001200f;
++			else
++				fogDensity = 0.000675f;
++		}
++
++		if (fogDensity > 0.0f)
++		{
++			qglDisable(GL_FOG);
++			qglFogfv(GL_FOG_COLOR, fogColor[fogType]);
++			qglFogi(GL_FOG_MODE, GL_EXP2);
++			qglFogf(GL_FOG_DENSITY, fogDensity);
++			qglHint(GL_FOG_HINT, GL_NICEST);
++			qglEnable(GL_FOG);
++		}
++		else
++			qglDisable(GL_FOG);
++	}
++	else
++	{
++		qglDisable(GL_FOG);
++		fogDensity = 0.0f;
++	}
++}
++
++/*
++================
+ R_RenderView
+ 
+ r_newrefdef must be set before the first call
+@@ -1027,6 +1133,8 @@ static void R_RenderView (refdef_t *fd)
+ 
+ 	R_MarkLeaves();	// done here so we know if we're in water
+ 
++	R_SetupFog();
++
+ 	R_DrawWorld();
+ 
+ 	R_AddDecals(); //Decals
+@@ -1054,7 +1162,7 @@ static void R_RenderView (refdef_t *fd)
+ 			r_newrefdef.num_particles); 
+ 	}
+ 
+-	if(gl_fog->integer)
++	/*if(gl_fog->integer)
+ 	{
+ 		static const float fogcolor[4] = {0.09f,0.1f,0.12f,1.0f};
+ 
+@@ -1062,7 +1170,7 @@ static void R_RenderView (refdef_t *fd)
+ 		qglFogf		(GL_FOG_DENSITY, gl_fog_density->value*2/4096);
+ 		qglFogfv	(GL_FOG_COLOR, fogcolor);
+ 		qglEnable	(GL_FOG);
+-	}
++	}*/
+ }
+ 
+ static void R_MotionBlur(void)
+@@ -1435,7 +1543,8 @@ static void GL_Register( void )
+ 
+ 	gl_gammapics = Cvar_Get( "gl_gammapics", "1", CVAR_ARCHIVE|CVAR_LATCHED );
+ 	gl_fog = Cvar_Get ("gl_fog", "0", 0);
+-	gl_fog_density = Cvar_Get ("gl_fog_density", "1", 0);
++	//gl_fog_density = Cvar_Get ("gl_fog_density", "1", 0);
++	gl_timebasedfx = Cvar_Get("gl_timebasedfx", "0", CVAR_ARCHIVE);
+ 	gl_coloredlightmaps = Cvar_Get( "gl_coloredlightmaps", "1", CVAR_ARCHIVE|CVAR_LATCHED);
+ 
+ 	gl_eff_world_wireframe = Cvar_Get( "gl_eff_world_wireframe", "0", CVAR_CHEAT );
+diff -urp a/ref_gl/gl_rsurf.c b/ref_gl/gl_rsurf.c
+--- a/ref_gl/gl_rsurf.c	2011-02-24 23:56:51.000000000 -0600
++++ b/ref_gl/gl_rsurf.c	2010-11-26 18:08:28.000000000 -0600
+@@ -622,6 +622,7 @@ void GL_DrawPoly(int nv, msurface_t *sur
+ 
+ extern void EmitCausticPolys (const glpoly_t *p);
+ 
++extern float fogDensity;
+ static void GL_RenderLightmappedPoly( msurface_t *surf )
+ {
+ 	int		i, nv = surf->polys->numverts;
+@@ -648,7 +649,7 @@ dynamic:
+ 				is_dynamic = true;
+ 		}
+ 	}
+-
++	
+ 	if ( is_dynamic )
+ 	{
+ 		unsigned	temp[128*128];
+@@ -677,7 +678,6 @@ dynamic:
+ 						  smax, tmax, 
+ 						  GL_LIGHTMAP_FORMAT, 
+ 						  GL_UNSIGNED_BYTE, temp );
+-
+ 	}
+ 
+ 	c_brush_polys++;
+@@ -693,6 +693,10 @@ dynamic:
+ 	}
+ 
+ 	if(gl_eff_world_bg_type->integer) {
++		//if (gl_watercaustics->integer && (surf->flags & SURF_UNDERWATER) && !(image->flags & IT_TRANS))
++		if (gl_watercaustics->integer && (CM_PointContents(r_newrefdef.vieworg, 0) & CONTENTS_WATER) && (surf->flags & SURF_UNDERWATER) && !(image->flags & IT_TRANS))
++			EmitCausticPolys(surf->polys);
++
+ 		GL_DrawPoly(nv,surf);
+ 	} else {
+ 		v = surf->polys->verts[0];
+@@ -706,13 +710,28 @@ dynamic:
+ 		}
+ 		qglEnd ();
+ 
+-		if (gl_watercaustics->integer && (surf->flags & SURF_UNDERWATER) && !(image->flags & IT_TRANS))
++		if (gl_watercaustics->integer && (CM_PointContents(r_newrefdef.vieworg, 0) & CONTENTS_WATER) && (surf->flags & SURF_UNDERWATER) && !(image->flags & IT_TRANS))
+ 			EmitCausticPolys(surf->polys);
+ 
+ 		if(gl_eff_world_wireframe->integer)
+ 			GL_DrawPoly(nv,surf);
+ 	}
+ 
++	// an attempt to disable water fog when water surface is transparent
++	//if ( (CM_PointContents(r_newrefdef.vieworg, 0) & CONTENTS_WATER) && fogDensity > 0.0f && (surf->flags & (SURF_TRANS33|SURF_TRANS66|SURF_WARP)) )
++	//	qglDisable(GL_FOG);
++	/*if ( (CM_PointContents(r_newrefdef.vieworg, 0) & CONTENTS_WATER) && fogDensity > 0.0f )
++	{
++		if (surf->flags & SURF_LIGHT) {	Com_Printf("SURF_LIGHT\n"); }
++		else if (surf->flags & SURF_SLICK) {	Com_Printf("SURF_SLICK\n"); }
++		else if (surf->flags & SURF_SKY) {		Com_Printf("SURF_SKY\n"); }
++		else if (surf->flags & SURF_WARP) {		Com_Printf("SURF_WARP\n"); }
++		else if (surf->flags & SURF_TRANS33) {	Com_Printf("SURF_TRANS33\n"); }
++		else if (surf->flags & SURF_TRANS66) {	Com_Printf("SURF_TRANS66\n"); }
++		else if (surf->flags & SURF_FLOWING) {	Com_Printf("SURF_FLOWING\n"); }
++		else if (surf->flags & SURF_UNDERWATER) {	Com_Printf("SURF_UNDERWATER\n"); }
++	}*/
++
+ }
+ 
+ /*
+diff -urp a/ref_gl/gl_warp.c b/ref_gl/gl_warp.c
+--- a/ref_gl/gl_warp.c	2011-02-24 23:56:52.000000000 -0600
++++ b/ref_gl/gl_warp.c	2010-11-26 18:08:29.000000000 -0600
+@@ -417,6 +417,7 @@ static void R_RotateMatrix (float dstM[1
+ 	dstM[10] = srcM[2] * t5 + srcM[6] * t2 + srcM[10] * t1;
+ }
+ 
++extern float	fogDensity;
+ static const int	skytexorder[6] = {0,2,1,3,4,5};
+ void R_DrawSkyBox (void)
+ {
+@@ -424,6 +425,10 @@ void R_DrawSkyBox (void)
+ 	float skyM[16];
+ 	vec_t	*v, *st;
+ 
++	// dude: engine_fog
++	if ( fogDensity > 0.0f )
++		qglDisable(GL_FOG);
++
+ 	if (skyrotate)
+ 	{	// check for no sky at all
+ 		for (i = 0; i < 6; i++) {
+@@ -479,6 +484,10 @@ void R_DrawSkyBox (void)
+ 	}
+ 
+ 	qglLoadMatrixf(r_WorldViewMatrix);
++
++	// dude: engine_fog
++	if ( fogDensity > 0.0f )
++		qglEnable(GL_FOG);
+ }
+ 
+ /*

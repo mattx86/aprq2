@@ -1,0 +1,13 @@
+#!/bin/bash
+
+BD=/home/matt/oss/aprq2_jdolan/releasex86_64
+ID=/home/matt/games/q2
+
+cp -f $BD/aq2 $ID/
+cp -f $BD/gamex86_64.so $ID/baseq2/
+
+chown matt:users $ID/aq2
+chown matt:users $ID/baseq2/gamex86_64.so
+
+chmod u+s $ID/aq2
+chmod u+s $ID/baseq2/gamex86_64.so

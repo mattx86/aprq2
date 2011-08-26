@@ -1,0 +1,44 @@
+--- a/ref_gl/gl_mesh.c	2011-02-24 23:56:51.000000000 -0600
++++ b/ref_gl/gl_mesh.c	2010-11-26 18:08:28.000000000 -0600
+@@ -84,6 +84,32 @@ static void GL_DrawOutLine (const aliasM
+ 	qglPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
+ }
+ 
++static void GL_BrightModel (const aliasMesh_t *mesh) 
++{
++	vec4_t	brightColor = { 1, 1, 1, 1 };
++
++	qglPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
++	qglDisable(GL_ALPHA_TEST);
++	qglEnable(GL_BLEND);
++	//GL_TexEnv(GL_MODULATE);
++	qglColor4fv(brightColor);
++
++	//GL_Bind (r_whitetexture->texnum);
++	if(gl_state.compiledVertexArray) {
++		qglLockArraysEXT(0, mesh->numVerts);
++		qglDrawElements (GL_TRIANGLES, mesh->numTris*3, GL_UNSIGNED_INT, mesh->indices);
++		qglUnlockArraysEXT ();
++	} else {
++		qglDrawElements (GL_TRIANGLES, mesh->numTris*3, GL_UNSIGNED_INT, mesh->indices);
++	}
++
++	//GL_TexEnv (GL_REPLACE);
++	//qglEnable(GL_ALPHA_TEST);
++	qglDisable(GL_BLEND);
++	qglPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
++}
++
++
+ /*
+ =============
+ GL_DrawAliasFrameLerp
+@@ -553,6 +579,8 @@ void R_DrawAliasModel (model_t *model)
+ 			if (gl_celshading->integer)
+ 				GL_DrawOutLine(mesh);
+ 
++			GL_BrightModel(mesh);
++
+ 			if (gl_shadows->integer && !(currententity->flags & RF_WEAPONMODEL))
+ 			{
+ 				if(mesh == paliashdr->meshes) {

@@ -1,0 +1,61 @@
+== Overview ==
+
+AprQ2 installation is fairly straightforward.  Type 'make' to build the game.
+Feel free to edit Makefile to meet your needs, but do so at your own peril.
+By default, the binaries will be built to the 'releasei386' directory.  Copy
+them to an appropriate path (e.g. ~/.quake2, /usr/share/games/quake2, etc).
+
+== Dependencies ==
+
+This version of AprQ2 should compile cleanly on recent Linux distributions and
+on Apple OS X 10.6 (Snow Leopard).  For Linux, you should install libSDL and
+libCURL via your package manager.  For OS X, you should install libSDL and 
+libCURL through MacPorts.
+
+If you get stuck installing dependencies, try the instructions for your
+platform here:
+
+  http://quake2world.net/books/documentation/installation-maintenance 
+
+== Installation ==
+
+1. Create your Quake2 directory.
+  mkdir -p ~/.quake2/baseq2
+  
+2. Install the Quake2 game data
+  cp /path/to/pak*.pak ~/.quake2/baseq2
+  
+3. Compile AprQ2
+  cd /path/to/aprq2
+  make -j2
+
+4. Install the binaries
+  cp releasei386/aq2 ~/.quake2
+  cp releasei386/gamei386.so ~/.quake2/baseq2
+  
+5. Install the optional game data (recommended)
+  cp -r baseq2/pics ~/.quake2/baseq2
+
+6. Start the game
+  cd ~/.quake2
+  ./aq2
+  
+== High-resolution textures ==
+
+R1CH (http://r1ch.net) provides an excellent high-color, high-resolution
+texture "pak" that looks fantastic in AprQ2.  You can download the "pak" file
+here:
+
+  http://r-1.ch/z6_32bitclr_png_allmaps.7z
+
+To install it, simply extract the archive and move the included .pak file to
+your Quake2 directory, and rename it to pak9.pak:
+
+  cd /tmp
+  wget http://r-1.ch/z6_32bitclr_png_allmaps.7z
+  cd ~/.quake2/baseq2
+  7z e /tmp/z6_32bitclr_png_allmaps.7z
+  mv z*.pak pak9.pak
+  
+
+  
